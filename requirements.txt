@@ -1,0 +1,10 @@
+
+
+
+torch
+onnx
+ultralytics
+numpy
+openvino
+opencv-python
+

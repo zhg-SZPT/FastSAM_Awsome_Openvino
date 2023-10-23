@@ -19,10 +19,11 @@ def generate_random_string(length):
 class FastSAM:
     
     # 
-    def __init__(self, model_path: str, conf_thres = 0.4, iou_thres = 0.9, use_gpu = True) -> None:
+    def __init__(self, model_path: str, conf_thres:float = 0.4, iou_thres:float = 0.9, device: str = "AUTO", outputPath: str = "./outputs") -> None:
         self.conf_threshold = conf_thres
         self.iou_threshold = iou_thres
-        self.use_gpu = use_gpu
+        self.device = device
+        self.outputPath = outputPath
         self.InitializeModel(model_path=model_path)
 
 
@@ -30,13 +31,13 @@ class FastSAM:
         core = ov.Core()
 
         model = core.read_model(model=model_path)
-        self.compiled_model = core.compile_model(model = model, device_name="GPU" if self.use_gpu else "CPU")
+        self.compiled_model = core.compile_model(model = model, device_name=self.device)
         
         self.GetInputDetail()
         self.GetOutputDetail()
     
     def GetInputDetail(self):
-        # 输入一般只有一个维度
+        # 输入一般只有一个维度，即这个inputs 长度为1
         self.inputs = self.compiled_model.inputs
         
 
@@ -53,8 +54,8 @@ class FastSAM:
     def __call__(self, image: cv2.Mat) -> Any:
         return self.SegmentObjects(OriginalImage=image)
 
-
-    def overlay(self, image, mask, color, alpha, resize=None):
+   
+    def overlay(self, image: np.ndarray, mask: np.ndarray, color: tuple, alpha: float, resize=None):
         """Combines image and its segmentation mask into a single image.
         https://www.kaggle.com/code/purplejester/showing-samples-with-segmentation-mask-overlay
 
@@ -106,6 +107,7 @@ class FastSAM:
         rgb = np.array([inp], dtype = np.float32) / 255.0
         return np.transpose(rgb, (0, 3, 1, 2)) # 重新排列为batch_size, channels, height, width
 
+    
     def Postprocess(self, preds, img, orig_imgs, retina_masks, conf, iou, agnostic_nms=False):
         p = ops.non_max_suppression(preds[0],
                                 conf,
@@ -161,7 +163,7 @@ class FastSAM:
             rand_color = (r, g, b)
             image_with_masks = self.overlay(image_with_masks, mask_i, color=rand_color, alpha=1)
 
-        outPath = "./outputs/"
+        outPath = self.outputPath
         if not os.path.exists(outPath):
             os.makedirs(outPath)
 
@@ -177,7 +179,7 @@ def parse_args():
         "--model_path", type=str, default="./models/FastSAM-s.xml", help="model"
     )
     parser.add_argument(
-        "--img_path", type=str, default="./images/cat.jpg", help="path to image file"
+        "--img_path", type=str, default="./images/coco.jpg", help="path to image file"
     )
     parser.add_argument("--imgsz", type=int, default=640, help="image size")
     parser.add_argument(
@@ -190,11 +192,11 @@ def parse_args():
         "--conf", type=float, default=0.4, help="object confidence threshold"
     )
     parser.add_argument(
-        "--output", type=str, default="./output/", help="image save path"
+        "--output", type=str, default="./outputs/", help="image save path"
     )
 
     parser.add_argument(
-        "--device", type=str, default="CPU", help="[GPU] or [CPU] or [AUTO]"
+        "--device", type=str, default="GPU", help="[GPU] or [CPU] or [AUTO]"
     )
 
     return parser.parse_args()
@@ -202,7 +204,9 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
 
-    infer = FastSAM(model_path=args.model_path, conf_thres=args.conf, iou_thres=args.iou)
+    infer = FastSAM(model_path=args.model_path, conf_thres=args.conf, iou_thres=args.iou, device=args.device, outputPath=args.output)
 
     image = cv2.imread(args.img_path)
     infer(image)
+
+   
