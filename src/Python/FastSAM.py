@@ -140,7 +140,11 @@ class FastSAM:
     def SegmentObjects(self, OriginalImage: cv2.Mat):
         N, C, H, W = self.inputs[0].shape
         Size = [H,W]
+        
+        start = time.time()
         input = self.Preprocess(OriginalImage, Size)
+        end = time.time()
+        print("preprocess time:{} ms".format((end - start) * 1000) )
 
         start = time.time()
         result = self.compiled_model([input])
@@ -151,7 +155,10 @@ class FastSAM:
         output2 = torch.from_numpy(result[self.outputs[1]])
         pred = [output1, output2]
 
+        start = time.time()
         ans = self.Postprocess(preds=pred, img=input, orig_imgs=OriginalImage, retina_masks=True, conf=self.conf_threshold, iou=self.iou_threshold)
+        end = time.time()
+        print("postprocess time:{} ms".format((end - start) * 1000) )
 
         masks = ans[0].masks.data
 
@@ -207,6 +214,8 @@ if __name__ == "__main__":
     infer = FastSAM(model_path=args.model_path, conf_thres=args.conf, iou_thres=args.iou, device=args.device, outputPath=args.output)
 
     image = cv2.imread(args.img_path)
+    
     infer(image)
+
 
    

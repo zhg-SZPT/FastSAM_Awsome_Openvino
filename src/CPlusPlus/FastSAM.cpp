@@ -49,8 +49,15 @@ void FastSAM::Infer(const std::string &image_path)
         cv::Mat image = cv::imread(image_path);
     
         cv::Mat rendered = Infer(image);
-    
-        cv::imwrite(std::filesystem::path(image_path).filename().string(), rendered);
+
+        std::string savedir = std::filesystem::current_path().string() + "/results";
+        if(!std::filesystem::exists(savedir))
+            std::filesystem::create_directory(savedir);
+            
+        std::string savepath = savedir + "/" + std::filesystem::path(image_path).filename().string();
+        cv::imwrite(savepath, rendered);
+
+        slog::info << "result save in:" << savepath << "\n";
     }
     catch(const std::exception& e)
     {
@@ -60,12 +67,12 @@ void FastSAM::Infer(const std::string &image_path)
 
 cv::Mat FastSAM::Infer(const cv::Mat &image)
 {
+    
     ov::Tensor input_tensor = Preprocess(image);
-    slog::info << "input tensor shape:" << input_tensor.get_shape() << "\n";
 
     m_request.set_input_tensor(input_tensor);
     m_request.infer();
-
+   
     auto* p0 = m_request.get_output_tensor(0).data();
     auto* p1 = m_request.get_output_tensor(1).data();
 

@@ -21,11 +21,20 @@ https://github.com/CASIA-IVA-Lab/FastSAM
     mo --input_model FastSAM-s.onnx --framework onnx
 ```
 
-## INFER OPENVINO
-```
-    python inference.py
-```
+## Inference with Python
 
+1. ```"cd FASTSAM_AWSOME_OPENVINO/src/Python"``` # change to python dir
+2. ```"pip install -r requirements.txt"``` # install the requirements
+3. ```"python FastSAM.py --model_path <model_path> --img_path <img_path>"``` # Inference
+
+
+## Inference with cpp
+Note: 
+1. ```"cd FASTSAM_AWSOME_OPENVINO/src/CPlusPlus"```
+2. Set OpenVINO_DIR in this CMakeLists.txt to your own openvino installation directory
+3. ``` "mkdir build && cd build"```
+4. ```"cmake .. && make -j4"```
+ 
 ![cat](outputs/cat.jpg)
 ![coco](outputs/coco.jpg)
 

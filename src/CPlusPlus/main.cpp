@@ -45,6 +45,7 @@ void printInputAndOutputsInfo(const ov::Model& network) {
 
 
 
+#include <chrono>
 
 
 
@@ -62,7 +63,17 @@ int main(int argc, char* argv[])
 
     FastSAM fastsam;
     if(fastsam.Initialize(xml_path, 0.3, 0.2, true)) {
+
+        
         fastsam.Infer(image_path);
+        
+        auto start = std::chrono::steady_clock::now();
+        fastsam.Infer(image_path);
+        auto end = std::chrono::steady_clock::now();
+        
+
+        auto tt = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();;
+        slog::info << "infer time:" << tt << " ms. \n";
     }
 
     
