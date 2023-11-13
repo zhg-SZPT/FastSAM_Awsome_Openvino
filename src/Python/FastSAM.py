@@ -4,8 +4,8 @@ import cv2
 import numpy as np
 import openvino as ov
 import os
-from ultralytics.yolo.engine.results import Results
-from ultralytics.yolo.utils import ops
+from ultralytics.engine.results import Results
+from ultralytics.utils import ops
 import torch
 from random import randint, choice
 import string
@@ -116,9 +116,9 @@ class FastSAM:
                                 max_det=100,
                                 nc=1)
         results = []
-        proto = preds[1][-1] if len(preds[1]) == 3 else preds[1]  # second output is len 3 if pt, but only 1 if exported
+        proto = preds[1]  # second output is len 3 if pt, but only 1 if exported
         for i, pred in enumerate(p):
-            orig_img = orig_imgs[i] if isinstance(orig_imgs, list) else orig_imgs
+            orig_img = orig_imgs
             # path = self.batch[0]
             img_path = "ok"
             if not len(pred):  # save empty boxes
@@ -176,10 +176,10 @@ class FastSAM:
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--model_path", type=str, default="./models/FastSAM-s.xml", help="model"
+        "--model_path", type=str, default="../../models/FastSAM-s.xml", help="model"
     )
     parser.add_argument(
-        "--img_path", type=str, default="./images/coco.jpg", help="path to image file"
+        "--img_path", type=str, default="../../images/coco.jpg", help="path to image file"
     )
     parser.add_argument("--imgsz", type=int, default=640, help="image size")
     parser.add_argument(
@@ -189,10 +189,10 @@ def parse_args():
         help="iou threshold for filtering the annotations",
     )
     parser.add_argument(
-        "--conf", type=float, default=0.4, help="object confidence threshold"
+        "--conf", type=float, default=0.1, help="object confidence threshold"
     )
     parser.add_argument(
-        "--output", type=str, default="./outputs/", help="image save path"
+        "--output", type=str, default="../../outputs/", help="image save path"
     )
 
     parser.add_argument(
