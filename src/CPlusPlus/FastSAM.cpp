@@ -34,8 +34,7 @@ bool FastSAM::Initialize(const std::string &xml_path, float conf, float iou,  bo
         return false;
     
     if(useGpu)
-        m_compiled_model = m_core.compile_model(m_model, 
-                IsGpuAvaliable(m_core) ? "GPU":"CPU");
+        m_compiled_model = m_core.compile_model(m_model, IsGpuAvaliable(m_core) ? "GPU":"CPU");
 
     m_request = m_compiled_model.create_infer_request();
 
@@ -57,35 +56,27 @@ void FastSAM::Infer(const std::string &image_path)
         std::string savepath = savedir + "/" + std::filesystem::path(image_path).filename().string();
         cv::imwrite(savepath, rendered);
 
-        slog::info << "result save in:" << savepath << "\n";
+        slog::info << "result saved in :" << savepath << "\n";
     }
     catch(const std::exception& e)
     {
-        slog::info << "Failed to Infer! ec: " <<e.what() << '\n';
+        slog::info << "Failed to Infer! ec: " << e.what() << '\n';
     }
 }
 
 cv::Mat FastSAM::Infer(const cv::Mat &image)
 {
+    cv::Mat processedImg = image.clone();
+    ov::Tensor input_tensor = Preprocess(processedImg);
     
-    ov::Tensor input_tensor = Preprocess(image);
+    assert(input_tensor.get_size() != 0);
 
     m_request.set_input_tensor(input_tensor);
     m_request.infer();
-   
-    auto* p0 = m_request.get_output_tensor(0).data();
-    auto* p1 = m_request.get_output_tensor(1).data();
-
-    cv::Mat output0 = cv::Mat(model_output0_shape[1], model_output0_shape[2], CV_32F, p0);
-    cv::Mat output1 = cv::Mat(model_output1_shape[1], model_output1_shape[2] * model_output1_shape[3], CV_32F, p1);
     
-    std::vector<cv::Mat> preds = {output0, output1};
-    std::vector<cv::Mat> result =  Postprocess(preds, image);
+    std::vector<cv::Mat> result =  Postprocess(image);
 
-    cv::Mat renderImage = image.clone();
-    Render(renderImage, result);
-
-    return renderImage;
+    return Render(image, result);
 }
 
 bool FastSAM::ParseArgs()
@@ -96,15 +87,21 @@ bool FastSAM::ParseArgs()
         model_output0_shape = m_model->output(0).get_shape();
         model_output1_shape = m_model->output(1).get_shape();
         
-        slog::info  << "xml input shape:" << model_input_shape << "\n";
+        slog::info  << "xml input shape:" << model_input_shape << "\n"; 
         slog::info << "xml output shape 0:" << model_output0_shape << "\n";
         slog::info << "xml output shape 1:" << model_output1_shape << "\n";
 
-        input_height = model_input_shape[2];
+         // [1, 3, 640, 640]
+        input_channel = model_input_shape[1];
+        input_height = model_input_shape[2]; 
         input_width = model_input_shape[3];
+        
+        this->input_data.resize(input_channel * input_height * input_height);
 
         slog::info << "model input height:" << input_height << " input width:" << input_width << "\n";
-
+        
+        // output0 = [1,37,8400]
+        // output1 = [1,32,160,160]
         mh = model_output1_shape[2];
         mw = model_output1_shape[3];
 
@@ -120,26 +117,29 @@ bool FastSAM::ParseArgs()
     return true;
 }
 
-void FastSAM::ScaleBoxes(cv::Mat &box, const cv::Mat& oriImage)
+void FastSAM::ScaleBoxes(cv::Mat &box, const cv::Size& oriSize)
 {
+    float oriWidth = static_cast<float>(oriSize.width);
+    float oriHeight = static_cast<float>(oriSize.height);
     float *pxvec = box.ptr<float>(0);
+
     for (int i = 0; i < box.rows; i++) {
         pxvec = box.ptr<float>(i);
         pxvec[0] -= this->dw;   
-        pxvec[0] = std::clamp(pxvec[0] * this->ratio, 0.f, (float)oriImage.cols);
+        pxvec[0] = std::clamp(pxvec[0] * this->ratio, 0.f, oriWidth);
         pxvec[1] -= this->dh;
-        pxvec[1] = std::clamp(pxvec[1] * this->ratio, 0.f, (float)oriImage.rows);
+        pxvec[1] = std::clamp(pxvec[1] * this->ratio, 0.f, oriHeight);
         pxvec[2] -= this->dw;
-        pxvec[2] = std::clamp(pxvec[2] * this->ratio, 0.f, (float)oriImage.cols);
+        pxvec[2] = std::clamp(pxvec[2] * this->ratio, 0.f, oriWidth);
         pxvec[3] -= this->dh;
-        pxvec[3] = std::clamp(pxvec[3] * this->ratio, 0.f, (float)oriImage.rows);
+        pxvec[3] = std::clamp(pxvec[3] * this->ratio, 0.f, oriHeight);
     }
 }
 
 std::vector<cv::Mat> FastSAM::ProcessMaskNative(const cv::Mat &image, cv::Mat &protos, cv::Mat &masks_in, cv::Mat &bboxes, cv::Size shape)
 {
     std::vector<cv::Mat> result;
-    result.push_back(bboxes);
+    //result.push_back(bboxes);  // 
 
     cv::Mat matmulRes = (masks_in * protos).t(); // 矩阵相乘后转
 
@@ -147,9 +147,8 @@ std::vector<cv::Mat> FastSAM::ProcessMaskNative(const cv::Mat &image, cv::Mat &p
 
     std::vector<cv::Mat> maskChannels;
     cv::split(maskMat, maskChannels);
-    float target_size = input_height;
-    int scale_dw = this->dw / target_size * mw;
-    int scale_dh = this->dh / target_size * mh;
+    int scale_dw = this->dw / input_width * mw;
+    int scale_dh = this->dh / input_height * mh;
     cv::Rect roi(scale_dw, scale_dh, mw - 2 * scale_dw, mh - 2 * scale_dh);
     float *pxvec = bboxes.ptr<float>(0);
     for (int i = 0; i < bboxes.rows; i++) {
@@ -177,8 +176,9 @@ std::vector<cv::Mat> FastSAM::ProcessMaskNative(const cv::Mat &image, cv::Mat &p
     return result;
 }
 
-void FastSAM::NMS(std::vector<cv::Mat> &vreMat, cv::Mat &prediction, int max_det)
+std::vector<cv::Mat> FastSAM::NMS(cv::Mat &prediction, int max_det)
 {
+    std::vector<cv::Mat> vreMat;
     cv::Mat temData = cv::Mat();
     prediction = prediction.t(); // [37, 8400] --> [rows:8400, cols:37]
     float *pxvec = prediction.ptr<float>(0);
@@ -191,7 +191,7 @@ void FastSAM::NMS(std::vector<cv::Mat> &vreMat, cv::Mat &prediction, int max_det
     }
 
     if (temData.rows == 0) {
-        return;
+        return vreMat;
     }
 
     cv::Mat box = temData.colRange(0, 4).clone();   // 取所有box的列的值
@@ -227,7 +227,7 @@ void FastSAM::NMS(std::vector<cv::Mat> &vreMat, cv::Mat &prediction, int max_det
     vreMat.push_back(box);
     vreMat.push_back(mask);
 
-    slog::info << "mask size:" << mask.rows << "\n";
+    return vreMat;
 }
 
 void FastSAM::xywh2xyxy(cv::Mat &box)
@@ -246,99 +246,143 @@ void FastSAM::xywh2xyxy(cv::Mat &box)
   }
 }
 
-void FastSAM::Render(cv::Mat &image, const std::vector<cv::Mat>& vremat)
+cv::Mat FastSAM::Render(const cv::Mat &image, const std::vector<cv::Mat>& vremat)
 {
+    cv::Mat rendered = image.clone();
 
-    cv::Mat bbox = vremat[0];
-    float *pxvec = bbox.ptr<float>(0);
-    
-    for (int i = 1; i < vremat.size(); i++) {
-        cv::Mat mask = vremat[i];
+    for (const auto& mask : vremat) {       
         auto color = RandomColor();
-
         for (int y = 0; y < mask.rows; y++) {
-        const float *mp = mask.ptr<float>(y);
-        uchar *p = image.ptr<uchar>(y);
-        for (int x = 0; x < mask.cols; x++) {
-            if (mp[x] == 1.0) {
-            p[0] = cv::saturate_cast<uchar>(p[0] * 0.5 + color[0] * 0.5);
-            p[1] = cv::saturate_cast<uchar>(p[1] * 0.5 + color[1] * 0.5);
-            p[2] = cv::saturate_cast<uchar>(p[2] * 0.5 + color[2] * 0.5);
-            }
-            p += 3;
-        }
-        }
-    }
-
-}
-
-void FastSAM::Normalize2Vec(cv::Mat &image)
-{
-    int row = image.rows;
-    int col = image.cols;
-    this->input_data.resize(row * col * image.channels());
-    cv::cvtColor(image, image, cv::COLOR_BGR2RGB);
-
-    for (int c = 0; c < 3; c++) {
-        for (int i = 0; i < row; i++) {
-            for (int j = 0; j < col; j++) {
-                float pix = image.ptr<unsigned char>(i)[j * 3 + c];
-                // 将像素值归一化到[0, 1]范围
-                this->input_data[c * row * col + i * col + j] = pix / 255.0;
+            const float *mp = mask.ptr<float>(y);
+            uchar *p = rendered.ptr<uchar>(y);
+            for (int x = 0; x < mask.cols; x++) {
+                if (mp[x] == 1.0) { // ??
+                    p[0] = cv::saturate_cast<uchar>(p[0] * 0.5 + color[0] * 0.5);
+                    p[1] = cv::saturate_cast<uchar>(p[1] * 0.5 + color[1] * 0.5);
+                    p[2] = cv::saturate_cast<uchar>(p[2] * 0.5 + color[2] * 0.5);
+                }
+                p += 3;
             }
         }
     }
+
+    return rendered;
 }
 
-ov::Tensor FastSAM::Preprocess(const cv::Mat &image)
+
+
+ov::Tensor FastSAM::Preprocess(cv::Mat &image)
 {
-    float height = (float)image.rows;
-    float width = (float)image.cols;
+    if(!ConvertSize(image)) {
+        slog::info << "failed to Convert Size!\n";
+        return ov::Tensor();
+    }
 
-    int target_size = input_height;
-    float r = std::min(target_size / height, target_size / width);
-    int padw = (int)std::round(width * r);
-    int padh = (int)std::round(height * r);
+    if(!ConvertLayout(image)) {
+        slog::info << "Failed to Convert Layout!\n";
+        return ov::Tensor();
+    }
 
+    return BuildTensor();
+}
+
+
+std::vector<cv::Mat> FastSAM::Postprocess(const cv::Mat& oriImage)
+{
+    cv::Mat prediction = BuildOutput0();
+    cv::Mat proto = BuildOutput1();
+
+    std::vector<cv::Mat> remat = NMS(prediction, 100);
     
-    if((int)width != padw || (int)height != padh) 
-        cv::resize(image, m_image, cv::Size(padw, padh));
-    else 
-        m_image = image.clone();
+    if(remat.size() < 2) {
+        slog::info << "Empty data after nms!\n";
+        return std::vector<cv::Mat>();
+    }
 
-    float _dw = target_size - padw;
-    float _dh = target_size - padh;
-    _dw /= 2.0f;
-    _dh /= 2.0f;
-    int top = int(std::round(_dh - 0.1f));
-    int bottom = int(std::round(_dh + 0.1f));
-    int left = int(std::round(_dw - 0.1f));
-    int right = int(std::round(_dw + 0.1f));
-    cv::copyMakeBorder(m_image, m_image, top, bottom, left, right, cv::BORDER_CONSTANT,
+    cv::Mat box = remat[0];
+    cv::Mat mask = remat[1];
+    ScaleBoxes(box, oriImage.size());
+
+    return ProcessMaskNative(oriImage, proto, mask, box, oriImage.size());
+}
+
+cv::Mat FastSAM::BuildOutput0()
+{
+    auto* ptr = m_request.get_output_tensor(0).data();
+    return cv::Mat(model_output0_shape[1], model_output0_shape[2], CV_32F, ptr);
+}
+
+cv::Mat FastSAM::BuildOutput1()
+{
+    auto* ptr = m_request.get_output_tensor(1).data();
+    return cv::Mat(model_output1_shape[1], model_output1_shape[2] * model_output1_shape[3], CV_32F, ptr);
+}
+
+
+
+bool FastSAM::ConvertSize(cv::Mat &image)
+{
+    float height = static_cast<float>(image.rows);
+    float width = static_cast<float>(image.cols);
+
+    float r = std::min(input_height / height, input_width / width);
+    int padw = static_cast<int>(std::round(width * r));  // 需要放缩成为的值
+    int padh = static_cast<int>(std::round(height * r));
+
+    // 输入图像的宽高不一致的情况 
+    if((int)width != padw || (int)height != padh) 
+        cv::resize(image, image, cv::Size(padw, padh));
+    
+
+    // 把等比缩放得到的图像 计算需要填充padding值
+    float _dw = (input_width - padw) / 2.f; 
+    float _dh = (input_height - padh) / 2.f;
+    // 除2是为了把添加的padding 平摊到左右两边, 是为了保证放缩后的图像在整个图像的正中央
+    
+    int top =  static_cast<int>(std::round(_dh - 0.1f));
+    int bottom = static_cast<int>(std::round(_dh + 0.1f));
+    int left = static_cast<int>(std::round(_dw - 0.1f));
+    int right = static_cast<int>(std::round(_dw + 0.1f));
+    cv::copyMakeBorder(image, image, top, bottom, left, right, cv::BORDER_CONSTANT,
                         cv::Scalar(114, 114, 114));
 
-    this->ratio = 1 / r;
+    // 还原坐标只需要乘这个ratio即可
+    this->ratio = 1 / r;  
     this->dw = _dw;
     this->dh = _dh;
 
-    Normalize2Vec(m_image);
-
-    return ov::Tensor(ov::element::f32, ov::Shape({1, 3, (unsigned long)input_height, (unsigned long)input_width}), input_data.data());    
+    return true;
 }
 
-
-std::vector<cv::Mat> FastSAM::Postprocess(std::vector<cv::Mat> &preds, const cv::Mat& oriImage)
+bool FastSAM::ConvertLayout(cv::Mat &image)
 {
-    std::vector<cv::Mat> result;
+    int row = image.rows;
+    int col = image.cols;
+    int channels = image.channels();
 
-    std::vector<cv::Mat> remat;
-    NMS(remat, preds[0], 100);
-    cv::Mat proto = preds[1];
-    cv::Mat box = remat[0];
-    cv::Mat mask = remat[1];
-    ScaleBoxes(box, oriImage);
+    if(channels != 3)
+        return false;
 
-    return ProcessMaskNative(oriImage, proto, mask, box, oriImage.size());
+    cv::cvtColor(image, image, cv::COLOR_BGR2RGB);
+    
+    for (int c = 0; c < channels; c++) {
+        for (int i = 0; i < row; i++) {
+            for (int j = 0; j < col; j++) {
+                float pix = image.at<cv::Vec3b>(i, j)[c];
+                input_data[c * row * col + i * col + j] = pix / 255.0;
+                
+            }
+        }
+    }
+
+    return true;
+}
+
+ov::Tensor FastSAM::BuildTensor()
+{
+    ov::Shape shape = {1, static_cast<unsigned long>(input_channel), static_cast<unsigned long>(input_height), static_cast<unsigned long>(input_width)};
+
+    return ov::Tensor(ov::element::f32, shape, input_data.data());;
 }
 
 bool FastSAM::BuildProcessor()
@@ -347,16 +391,13 @@ bool FastSAM::BuildProcessor()
     {
         m_ppp = std::make_shared<ov::preprocess::PrePostProcessor>(m_model);
 
+
         m_ppp->input().tensor()
-            .set_shape(ov::Shape({1, 3, 640, 640}))
-            .set_element_type(ov::element::f32) 
-            .set_color_format(ov::preprocess::ColorFormat::RGB)
-            .set_layout("NCHW");
+            .set_shape({1, input_channel, input_height, input_width})
+            .set_element_type(ov::element::f32)
+            .set_layout("NCHW")
+            .set_color_format(ov::preprocess::ColorFormat::RGB);
 
-        // m_ppp->input().preprocess()
-        //     .convert_layout("NCHW");
-
-        
         m_model = m_ppp->build();
     }
     catch(const std::exception& e)
