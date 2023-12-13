@@ -33,8 +33,7 @@ bool FastSAM::Initialize(const std::string &xml_path, float conf, float iou,  bo
     if(!BuildProcessor()) 
         return false;
     
-    if(useGpu)
-        m_compiled_model = m_core.compile_model(m_model, IsGpuAvaliable(m_core) ? "GPU":"CPU");
+    m_compiled_model = m_core.compile_model(m_model, useGpu && IsGpuAvaliable(m_core) ? "GPU":"CPU");
 
     m_request = m_compiled_model.create_infer_request();
 
